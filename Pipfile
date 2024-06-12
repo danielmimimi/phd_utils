@@ -1,0 +1,25 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+unittest-xml-reporting = "==2.2.0"
+numpy = "*"
+pandas = "*"
+matplotlib = "*"
+opencv-python = "*"
+tqdm = "*"
+seaborn = "*"
+py-cpuinfo = "*"
+scikit-learn = "*"
+flake8 = "==4.0.1"
+black = "==22.1.0"
+psutil = "==5.9.0"
+pyyaml = "==6.0"
+
+
+[dev-packages]
+
+[requires]
+python_version = "3.10"
