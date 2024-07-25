@@ -18,6 +18,8 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', help='Path to config file', default='D:\gen2', type=Path)
+    parser.add_argument('--version', help='Path to config file', default='half_step', type=str)
+    parser.add_argument('--length_requirement', help='Path to config file', default=16, type=int)
     args = parser.parse_args()
 
 
@@ -51,6 +53,8 @@ def main():
                 annotations_file = Path(folder_name).joinpath("annotation.csv")
                 if annotations_file.exists():
                     start,stop,valid = get_start_and_stop_frame(Path(folder_name))
+                    if stop-start < args.length_requirement and label != 4:
+                        valid =False
                     if not valid:
                         folders_to_remove.append(folder_index)           
                 else:
@@ -107,9 +111,9 @@ def main():
         with open(filename, 'w') as f:
             json.dump({"Data": data}, f, indent=4)
 
-    save_to_json(train_data, args.dataset.joinpath('annotations_train.json'))
-    save_to_json(val_data, args.dataset.joinpath('annotations_validation.json'))
-    save_to_json(test_data, args.dataset.joinpath('annotations_test.json'))
+    save_to_json(train_data, args.dataset.joinpath('annotations_train_{}.json'.format(args.version)))
+    save_to_json(val_data, args.dataset.joinpath('annotations_validation_{}.json'.format(args.version)))
+    save_to_json(test_data, args.dataset.joinpath('annotations_test_{}.json'.format(args.version)))
 
 
 if __name__ == "__main__":
