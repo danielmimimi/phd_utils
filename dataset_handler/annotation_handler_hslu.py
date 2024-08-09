@@ -16,8 +16,18 @@ Generic hslu annotation handling.
 
 import csv
 import os
+from pathlib import Path
 import sys
 from typing import List, Tuple
+
+from concurrent.futures import ProcessPoolExecutor, TimeoutError
+import csvkit
+
+def write_chunk(annotationFilePath, chunk):
+    # print(f"Writing chunk of size {len(chunk)} to {annotationFilePath}...")
+    with open(annotationFilePath, 'a') as file:
+        writer = csvkit.writer(file)
+        writer.writerows(chunk)
 
 class AnnotationHandlerHslu:
 
@@ -222,10 +232,87 @@ class AnnotationHandlerHslu:
                 for col in range(len(lineList)):
                     if col > 0:
                         annotationLinesList[line][col] = ' ' + annotationLinesList[line][col]
+        # print(len(annotationLinesList))
 
-        with open(annotationFilePath, 'a', newline='') as file:
-            writer = csv.writer(file, delimiter=',', skipinitialspace=False,quoting=csv.QUOTE_MINIMAL)
-            writer.writerows(annotationLinesList)
+
+        # Function to write a chunk of data to the CSV
+
+            # print(f"Finished writing chunk of size {len(chunk)} to {annotationFilePath}.")
+
+            # print(f"Writing chunk of size {len(chunk)} to {annotationFilePath}...")
+            # with open(annotationFilePath, 'a', newline='') as file:
+            #     writer = csv.writer(file, delimiter=',', skipinitialspace=False, quoting=csv.QUOTE_MINIMAL)
+            #     writer.writerows(chunk)
+            # print(f"Finished writing chunk of size {len(chunk)} to {annotationFilePath}.")
+            # # with open(annotationFilePath, 'a', newline='') as file:
+            #     writer = csv.writer(file, delimiter=',', skipinitialspace=False, quoting=csv.QUOTE_MINIMAL)
+            #     writer.writerows(chunk)
+
+        def delete_file_again(file):
+            file_path = Path(file)
+            if file_path.exists():
+                file_path.unlink(missing_ok=True)
+
+        valid_data = [line for line in annotationLinesList if isinstance(line, list)]
+        timeout = 10
+        chunk_size = 500
+        with ProcessPoolExecutor(max_workers=1) as executor:
+            for i in range(0, len(valid_data), chunk_size):
+                chunk = valid_data[i:i + chunk_size]
+                future = executor.submit(write_chunk, annotationFilePath, chunk)
+                try:
+                    # print(f"Submitting chunk {i // chunk_size + 1} for writing...")
+                    future.result(timeout=timeout)
+                    # print(f"Successfully appended {len(chunk)} lines to {annotationFilePath}.")
+                except TimeoutError:
+                    delete_file_again(annotationFilePath)
+                    print(f"Writing to {annotationFilePath} timed out.")
+                    break
+                except Exception as e:
+                    delete_file_again(annotationFilePath)
+                    print(f"An unexpected error occurred: {str(e)}")
+                    break
+                
+        
+
+        # signal.signal(signal.SIGALRM, handler)
+
+        # def write_chunk(chunk):
+        #     try:
+        #         # signal.alarm(timeout)  # Set the timeout
+        #         with open(annotationFilePath, 'a', newline='') as file:
+        #             writer = csv.writer(file, delimiter=',', skipinitialspace=False, quoting=csv.QUOTE_MINIMAL)
+        #             writer.writerows(chunk)
+        #         # signal.alarm(0)  # Reset the alarm
+        #         print(f"Successfully appended {len(chunk)} lines to {annotationFilePath}.")
+        #     except TimeoutException:
+        #         print(f"Writing to {annotationFilePath} timed out.")
+        #     except IOError as e:
+        #         print(f"An I/O error occurred: {e.strerror}")
+        #     except Exception as e:
+        #         print(f"An unexpected error occurred: {str(e)}")
+        #     finally:
+        #         pass
+        #         # signal.alarm(0)  # Reset the alarm in case of other exceptions
+
+        # # Validate and chunk data
+        # valid_data = [line for line in annotationLinesList if isinstance(line, list)]
+        # for i in range(0, len(valid_data), chunk_size):
+        #     chunk = valid_data[i:i + chunk_size]
+        #     write_chunk(chunk)
+
+
+
+        # try:
+        #     with open(annotationFilePath, 'a', newline='') as file:
+        #         writer = csv.writer(file, delimiter=',', skipinitialspace=False, quoting=csv.QUOTE_MINIMAL)
+        #         writer.writerows(annotationLinesList)
+        
+        # except IOError as e:
+        #     print(e)
+        #     # with open(annotationFilePath, 'a', newline='') as file:
+        #     # writer = csv.writer(file, delimiter=',', skipinitialspace=False,quoting=csv.QUOTE_MINIMAL)
+        #     # writer.writerows(annotationLinesList)
 
 
     def getAnnotationHeader(self, annotationFilePath):
