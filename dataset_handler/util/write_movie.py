@@ -3,7 +3,7 @@ import cv2
 import matplotlib
 
 
-def write_movie(frame_grouped,folder,mask_exists,frameSize = (640, 480)):
+def write_movie(frame_grouped,folder,frameSize = (640, 480)):
         
         movel_real = []
         movie_ann = []
@@ -41,7 +41,7 @@ def write_movie(frame_grouped,folder,mask_exists,frameSize = (640, 480)):
                 # cv2.drawMarker(image,(int(row['Cx']),int(row['Cy'])),color=color,line_type=cv2.LINE_4)
                 # cv2.putText(image, str(row['Id']), (int(row['Cx']),int(row['Cy'])), cv2.FONT_HERSHEY_SIMPLEX, 
                 #     0.5, color, 1, cv2.LINE_AA)
-                if mask_exists:
+                if row['mask_exists']:
                     cv2.drawContours(image=image,contours=[row['Approx']],contourIdx=-1,color=color,thickness=1)    
             # plt.imshow(image)
             movie_ann.append(image)
