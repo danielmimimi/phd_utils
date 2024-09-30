@@ -3,6 +3,56 @@
 
 import numpy as np
 
+
+def get_world_velocity_subset(dataset, framerate=1):
+    time_interval = 1 / framerate
+    velocities = []
+    velocities_ms = []
+    velocitie_x_ms = []
+    velocities_y_ms = []
+
+    previous_wx = None
+    previous_wy = None
+    
+    
+    for element in dataset:
+        current_wx,current_wy = element.point
+
+        # current_wx = row['Keypoints']['wx'][0]
+        # current_wy = row['Keypoints']['wy'][0]
+        
+        if previous_wx is not None and previous_wy is not None:
+            # Calculate the change in position
+            delta_x = current_wx - previous_wx
+            delta_y = current_wy - previous_wy
+            
+            # Calculate the velocity
+            velocity_x = delta_x / time_interval
+            velocity_y = delta_y / time_interval
+            
+            # Calculate the magnitude of the velocity vector
+            velocity = (velocity_x**2 + velocity_y**2)**0.5
+            
+            # Append the velocity to the list
+            velocities.append({
+                'frame_index': element.imageName,
+                'velocity_x': velocity_x,
+                'velocity_y': velocity_y,
+                'velocity': velocity
+            })
+            
+            velocities_ms.append(velocity)
+            velocitie_x_ms.append(velocity_x)
+            velocities_y_ms.append(velocity_y)
+            
+        # Update the previous position
+        previous_wx = current_wx
+        previous_wy = current_wy
+    velocities_kmh = [v * 3.6 for v in velocities_ms]
+    velocities_x_kmh = [v * 3.6 for v in velocitie_x_ms]
+    velocities_y_kmh = [v * 3.6 for v in velocities_y_ms]
+    return velocities_kmh,velocities_x_kmh,velocities_y_kmh,velocities_ms
+
 def get_world_velocity(dataset, framerate=1):
     time_interval = 1 / framerate
     velocities = []
@@ -50,10 +100,7 @@ def get_world_velocity(dataset, framerate=1):
     velocities_y_kmh = [v * 3.6 for v in velocities_y_ms]
     return velocities_kmh,velocities_x_kmh,velocities_y_kmh,velocities_ms
                
-            
-                
-                
-                
+                      
 def get_velocity_towards_camera(dataset,depthmap,framerate=1,camera_tilt_angle=35):
     """returns kmh, ms"""
     floor_distance_to_camera = []

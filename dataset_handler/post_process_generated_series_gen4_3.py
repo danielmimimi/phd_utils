@@ -1,13 +1,17 @@
+from collections import defaultdict
 import glob
 import json
 from pathlib import Path
 import os
 import random
 import re
-import shutil 
+import shutil
+
+from matplotlib import pyplot as plt
+from sklearn.linear_model import LinearRegression 
 from dataset_handler.util.write_annotation_and_delete_files import write_annotation_and_delete_files
 from util.read_exr_image import read_exr_image, select_pixels_within_range
-from util.velocity_towards_camera import calculate_max_velocity_towards_camera
+from util.velocity_towards_camera import calculate_max_velocity_towards_camera, get_world_velocity_subset
 os.environ["OPENCV_IO_ENABLE_OPENEXR"]='1'
 
 import cv2
@@ -28,8 +32,8 @@ parser = argparse.ArgumentParser(
                     description='What the program does',
                     epilog='Text at the bottom of help')
 
-parser.add_argument('-c','--config_path',default=r"D:\gen4_2") 
-parser.add_argument('-w','--write_movie',default=True) 
+parser.add_argument('-c','--config_path',default=r"D:\gen4_2_1") 
+parser.add_argument('-w','--write_movie',default=False) 
 parser.add_argument('-d','--delete_annotation',default=False) 
 parser.add_argument('--debug',default=True) 
 parser.add_argument('--min_contour_area',default=100) 
@@ -37,16 +41,18 @@ parser.add_argument('--contour_approx_eps',default=0.8)
 parser.add_argument('--combine_convex',default=False) 
 parser.add_argument('--delete_empty_images',default=True) 
 parser.add_argument('--min_amount_of_images',default=8) 
-parser.add_argument('--output_folder',default='D:\gen4_3') 
+parser.add_argument('--output_folder',default='D:\gen4_3_2') 
 parser.add_argument('--depth_map',default=r"distances\gen4_distance.exr") 
 
 parser.add_argument('--version', help='version of selection', default='frame', type=str)
 
 parser.add_argument('--door_opening_velocity_max_ms',default=1.5) 
-parser.add_argument('--door_opening_acceleration_ms2',default=1) 
+parser.add_argument('--door_opening_acceleration_ms2',default=0.5) 
 parser.add_argument('--door_opening_distance_m',default=1.5) 
-parser.add_argument('--door_centerpoint',default='D:\gen4_21') 
 parser.add_argument('--camera_height_m',default=2) 
+
+parser.add_argument('--max_positive_sampler_per_sequence',default=2) 
+parser.add_argument('--entrance_difference_m',default=0.2) 
 args = parser.parse_args()
 
 
@@ -100,27 +106,52 @@ def main():
     
     def write_group(group,label,path):
         for index,group_chunks in enumerate(group):
-            origine_path = Path(group_chunks[0][1].iloc[0].annotation.file_path).parent
+            origine_path = Path(group_chunks[0].file_path).parent
             origin_name = origine_path.name
             dataset_path = path.joinpath(origin_name+'_'+label+'_'+str(index).zfill(3))
             
             dataset_path.mkdir(exist_ok=True)
             # os.mkdir(dataset_path.as_posix())
             for group_element in group_chunks:
-                target_file_path = dataset_path.joinpath(group_element[0].split(':')[0])
+                target_file_path = dataset_path.joinpath(group_element.imageName.split(':')[0])
                 # avoid overwriting
                 if target_file_path.exists():
                     continue
-                origin_file_path = origine_path.joinpath(group_element[0].split(':')[0])
+                origin_file_path = origine_path.joinpath(group_element.imageName.split(':')[0])
                 if origin_file_path.exists():
                     shutil.copyfile(origin_file_path.as_posix(),target_file_path.as_posix())
             extend_list(label,dataset_path)
+            
+    def extrapolate_line(points, ymax):
+        """Given a list of points, fit a line and extrapolate to intersect y=ymax."""
+        points = np.array(points)
+        X = points[:, 0].reshape(-1, 1)  # x-values
+        y = points[:, 1]  # y-values
+        
+        # Fit linear regression model
+        model = LinearRegression()
+        model.fit(X, y)
+        
+        # Get line parameters
+        slope = model.coef_[0]
+        intercept = model.intercept_
+        
+        if slope == 0:
+            return -1
+        # Calculate x-coordinate where y = ymax
+        x_intersect = (ymax - intercept) / slope
+        
+        return x_intersect
 
      
     Path(args.output_folder).mkdir(exist_ok=True)
     # os.mkdir(args.output_folder,exist_ok=True)
     
     
+    opening_group = []
+    other_group = []
+    
+    velocities = []
     # Read Annotations. 
     for annotation_file in tqdm(available_annotation_files):
         annotation_handler = AnnotationHandlerHslu()
@@ -128,142 +159,129 @@ def main():
         annotation_handler.readAnnotations(annotation_file.as_posix())
         annotation_items = annotation_handler.getAnnotationItemsList()
         smaller_list_of_elements = []
-        smaller_list_of_elements_with_id = []
+        regular_elements_with_id = []
+        world_elements_with_id = []
         for annotation_item in annotation_items:
-            if type(annotation_item) == AnnotationHandlerHslu.annotationItemPoint and 'walking_root'in annotation_item.label and 'world' not in annotation_item.label:
-                smaller_list_of_elements.append(annotation_item)
-                smaller_list_of_elements_with_id.append({'id':int(annotation_item.labelId),'annotation':annotation_item})
+            # find both world and other, save both with its id on the same dictionary
+            if type(annotation_item) == AnnotationHandlerHslu.annotationItemPoint and 'walking_root'in annotation_item.label and not 'world' in  annotation_item.label :
+                # smaller_list_of_elements.append(annotation_item)
+                regular_elements_with_id.append({'id':int(annotation_item.labelId),'annotation':annotation_item})
+            if type(annotation_item) == AnnotationHandlerHslu.annotationItemPoint and 'world walking_root'in annotation_item.label :
+                # smaller_list_of_elements.append(annotation_item)
+                world_elements_with_id.append({'id':int(annotation_item.labelId),'annotation':annotation_item})
+        
+        
+        
+        if len(regular_elements_with_id) == 0:
+            continue
         # Sort the list based on the frame number
-        regular_image = Path(smaller_list_of_elements_with_id[0]['annotation'].file_path).parent.joinpath(smaller_list_of_elements_with_id[0]['annotation'].imageName.split(':')[0])
-        h,w,c = cv2.imread(regular_image.as_posix()).shape
+        regular_image = Path(regular_elements_with_id[0]['annotation'].file_path).parent.joinpath(regular_elements_with_id[0]['annotation'].imageName.split(':')[0])
+        actual_image = cv2.imread(regular_image.as_posix())
+        h,w,c = actual_image.shape
         
         # SORT OUT POINTS THAT ARE NOT IN THE IMAGE, 
-        filtered_annotations = [a for a in smaller_list_of_elements_with_id if is_point_inside_image(a['annotation'].point, h, w)]
-        sortedd_annotations = sorted(filtered_annotations, key=lambda x: extract_frame_number(x['annotation'].imageName))
+        
+        # sortedd_annotations = sorted(filtered_annotations, key=lambda x: extract_frame_number(x['annotation'].imageName))
+        
+        # sort both
+        regular_elements_with_id_sorted = sorted(regular_elements_with_id, key=lambda x: extract_frame_number(x['annotation'].imageName))
+        world_elements_with_id_sorted = sorted(world_elements_with_id, key=lambda x: extract_frame_number(x['annotation'].imageName))
 
-
-        group_1 = []
-        group_2 = []
-        group_3 = []
-        group_4 = []
-        
+        filtered_annotations = []
+        for a, b in zip(regular_elements_with_id_sorted, world_elements_with_id_sorted):
+            if is_point_inside_image(a['annotation'].point, h, w):
+                filtered_annotations.append({'id':a['id'],'world':b['annotation'],'normal':a['annotation']})
 
         
+        grouped_annotations = defaultdict(list)
+
+        # Group elements by 'id'
+        for item in filtered_annotations:
+            grouped_annotations[item['id']].append({'normal':item['normal'],'world':item['world']})
+
         
-        def create_debug_image(image,mask):
-            mask_color = (0, 0, 255)  # Red
-            # Create a color mask
-            color_mask = np.zeros_like(image)
-            color_mask[mask > 0] = mask_color
-            alpha = 0.5  # Transparency factor
-            overlay = cv2.addWeighted(image, 1 - alpha, color_mask, alpha, 0)
-            return overlay
-        
-        chunk_size = 8
-        df = pd.DataFrame(sortedd_annotations)
-        df['imageName'] = df['annotation'].apply(lambda x: x.imageName)
-        groups = df.groupby('imageName')
-        
-        
-        def check_image_sequence(data):
-            # Extract the starting number from the first entry
-            first_image_name = data[0][0]  # e.g., 'image_00002.png:rot0'
+        # Iterate over every single person and their detections. 
+        for id_, group in grouped_annotations.items():
+            # sort group
+            sorted_detections = sorted(group, key=lambda x: extract_frame_number(x['world'].imageName))
             
-            # Ensure the format is correct
-            if not first_image_name.startswith('image_') or not first_image_name.endswith(':rot0'):
-                return False
-
-            # Extract the starting number (e.g., 2 from 'image_00002.png:rot0')
-            try:
-                starting_number = int(first_image_name.split('_')[1].split('.')[0])
-            except ValueError:
-                return False  # If the number extraction fails
-
-            # Loop through the entries to check the sequence
-            for i, entry in enumerate(data):
-                expected_number = starting_number + i  # Dynamically calculate the expected number
-
-                # Extract the actual number from the string
-                image_name = entry[0]
-                try:
-                    actual_number = int(image_name.split('_')[1].split('.')[0])
-                except ValueError:
-                    return False  # If the number extraction fails
-
-                # Check if the numbers match
-                if actual_number != expected_number:
-                    return False
-
-            return True
-        
-        def slice_groups(groups, n):
-            for i in range(0, len(groups), n):
-                yield groups[i:i + n]
-        # Iterate over each group
-        groups = list(df.groupby('imageName'))
-        for group_chunk in slice_groups(groups, chunk_size):
-            if check_image_sequence(group_chunk) and len(group_chunk) == 8:
-                
-                annotation_per_id = {}
-                for name, group in group_chunk:
-                    for index, subrow in group.iterrows():
-                    # Convert to groups of persons
-                        if subrow['id'] not in annotation_per_id:
-                            annotation_per_id[subrow['id']] = []
-                            annotation_per_id[subrow['id']].append(subrow['annotation'])
-                        else:
-                            annotation_per_id[subrow['id']].append(subrow['annotation'])
-                                  
-                single_all_outside = []
-                single_entering = []
-                single_exiting = []
-                single_all_inside_zone = []
-                # moving_0_1003
-                for person_id, items in annotation_per_id.items():
-
-                    single_outside = all(not selected_environment[int(annotation.point[1])][int(annotation.point[0])] for annotation in items)
-                    single_at_least_one_inside = any(selected_environment[int(annotation.point[1])][int(annotation.point[0])] for annotation in items)
-                    single_first_inside = selected_environment[int(items[0].point[1])][int(items[0].point[0])] 
-                    single_all_inside = all(selected_environment[int(annotation.point[1])][int(annotation.point[0])] for annotation in items)
-                    
-                    single_going_inside = not single_first_inside and single_at_least_one_inside
-                    sincle_leaving_region = single_first_inside and not single_all_inside
-                    
-                    if single_outside:# all outside
-                        single_all_outside.append(person_id)
-                    if single_going_inside: # entry - last inside, rest outside
-                        single_entering.append(person_id)
-                    if sincle_leaving_region:  # exit -first inside, rest outside
-                        single_exiting.append(person_id)
-                    if single_all_inside:# all inside
-                        single_all_inside_zone.append(person_id)
-                        
-                all_outside =len(single_all_outside) > 0  and len(single_entering) == 0 and len(single_exiting)== 0 and len(single_all_inside_zone) == 0
-                going_inside = len(single_entering) > 0
-                # leaving_region = any(single_exiting) and not going_inside
-                # all_inside = any(single_all_inside_zone) and not going_inside and not all_outside
-                
-                
-                
-                # going_inside = not first_inside and at_least_one_inside
-                # leaving_region = first_inside and not all_inside
-                
-                if going_inside:# all outside
-                    group_1.append(group_chunk)
-                    if args.debug:
-                        debug_image = create_debug_image(cv2.imread(Path(group_chunk[0][1].annotation.iloc[0].file_path).parent.joinpath(group_chunk[0][1].annotation.iloc[0].imageName.split(':')[0]).as_posix()),selected_environment)
-                if all_outside: # entry - last inside, rest outside
-                    group_2.append(group_chunk)
-                    if args.debug:
-                        debug_image = create_debug_image(cv2.imread(Path(group_chunk[0][1].annotation.iloc[0].file_path).parent.joinpath(group_chunk[0][1].annotation.iloc[0].imageName.split(':')[0]).as_posix()),selected_environment)
+            # measure speed
+            world_items = [item['world'] for item in sorted_detections]
+            normal_items = [item['normal'] for item in sorted_detections]
+            # world velocities in blender coordinates -> meaning y and x are twisted
+            # in blender (image) pos y is positive x and (image) positive x is positive y
+            velocities_kmh,velocities_x_kmh,velocities_y_kmh,velocities_ms = get_world_velocity_subset(world_items,framerate=10)
+            world_positions_x_y = [item['world'].point for item in sorted_detections]
+            image_positions_x_y = [item['normal'].point for item in sorted_detections]
             
+            
+            batch_size = 8
+            count_from_same_dataset = 0
+            for i in range(1, len(image_positions_x_y) - batch_size + 1, 1):      
+                # if count_from_same_dataset == args.max_positive_sampler_per_sequence :
+                #     break
+                # b for batched
+                b_annotation_items = normal_items[i:i+batch_size]
+                b_velocities_x_kmh = velocities_x_kmh[i-1 : i-1+batch_size]
+                b_velocities_y_kmh = velocities_y_kmh[i-1 : i-1+batch_size]
+                b_velocities_kmh = velocities_kmh[i-1 : i-1+batch_size]
+                
+                b_image_positions_x_y = image_positions_x_y[i:i+batch_size]
+                b_world_positions_x_y = world_positions_x_y[i:i+batch_size]
+                b_world_positions_y = [item[1] for item in b_world_positions_x_y]
+                b_world_positions_x = [item[0] for item in b_world_positions_x_y]
+                intersection_point = extrapolate_line(b_image_positions_x_y,h)
+                if door_left_end < intersection_point < door_right_end :
+                    # check if y velocity is positive
+                    velocity_is_positive = np.mean(b_velocities_x_kmh) > 0
+                    
+                    if not velocity_is_positive:
+                        continue
+                    # check how far away it is
+                    world_mean_x = np.mean(b_world_positions_x)
+                    world_mean_y = np.mean(b_world_positions_y)
+                    world_front_pos_x = b_world_positions_x[-1]
+                    world_front_pos_y = b_world_positions_x[-1]
+                    world_x_front_velocity_ms = b_velocities_x_kmh[-1]/3.6
+                    world_front_velocity_ms = b_velocities_kmh[-1]/3.6
+                    
+                    def calculate_distance_to_door(v_person_ms, v_max, a, m):
+                        term1 = v_max / (2 * a)
+                        term2 = m / v_max
+                        distance_to_door = v_person_ms * (term1 + term2)
+                        return distance_to_door
+                                        
+                    person_distance_to_door = np.sqrt((0 - world_front_pos_x)**2 + (0 - world_front_pos_y)**2)
+                    distance_to_door = calculate_distance_to_door(world_front_velocity_ms,
+                                                                  args.door_opening_velocity_max_ms,
+                                                                  args.door_opening_acceleration_ms2,
+                                                                  args.door_opening_distance_m)
+                    
+                    # otherwise too many close exampler are visible
+                    if distance_to_door+args.entrance_difference_m >= person_distance_to_door and distance_to_door-args.entrance_difference_m <= person_distance_to_door:   
+                        # regular_image = Path(world_items[i].file_path).parent.joinpath(world_items[i].imageName.split(':')[0])
+                        # actual_image = cv2.imread(regular_image.as_posix())
+                        count_from_same_dataset = count_from_same_dataset + 1
+                        opening_group.append(b_annotation_items)
+                        velocities.append(np.mean(b_velocities_kmh))
+                    else:
+                        other_group.append(b_annotation_items)
+        print(str(len(other_group)) + ' vs '+ str(len(opening_group)))
+    plt.hist(velocities, bins=10, color='blue', edgecolor='black')
+    # Add labels and title
+    plt.title('Histogram of Provided Data')
+    plt.xlabel('Values')
+    plt.ylabel('Frequency')
 
-                write_group(group_1,'entering',Path(args.output_folder))
-                write_group(group_2,'outside',Path(args.output_folder))
-        # write_group(group_3,'leaving',Path(args.output_folder))
-        # write_group(group_4,'inside',Path(args.output_folder))
-        # pass
-        # only require walking_root
+    # Show plot
+    plt.savefig("velocities.png")
+
+    write_group(opening_group,'entering',Path(args.output_folder))
+    # reduce size
+    other_group = random.sample(other_group, len(opening_group))
+    write_group(other_group,'none',Path(args.output_folder))
+
+    # only require walking_root
     random.shuffle(final_data)
     
     # separate by args.version
