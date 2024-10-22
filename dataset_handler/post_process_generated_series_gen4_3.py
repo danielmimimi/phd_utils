@@ -53,6 +53,8 @@ parser.add_argument('--camera_height_m',default=2)
 
 parser.add_argument('--max_positive_sampler_per_sequence',default=2) 
 parser.add_argument('--entrance_difference_m',default=0.2) 
+
+parser.add_argument('--adjusted_framerate',default=10)
 args = parser.parse_args()
 
 
@@ -210,7 +212,7 @@ def main():
             normal_items = [item['normal'] for item in sorted_detections]
             # world velocities in blender coordinates -> meaning y and x are twisted
             # in blender (image) pos y is positive x and (image) positive x is positive y
-            velocities_kmh,velocities_x_kmh,velocities_y_kmh,velocities_ms = get_world_velocity_subset(world_items,framerate=10)
+            velocities_kmh,velocities_x_kmh,velocities_y_kmh,velocities_ms = get_world_velocity_subset(world_items,framerate=args.adjusted_framerate)
             world_positions_x_y = [item['world'].point for item in sorted_detections]
             image_positions_x_y = [item['normal'].point for item in sorted_detections]
             
