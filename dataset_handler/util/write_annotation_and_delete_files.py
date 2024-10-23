@@ -77,7 +77,7 @@ def write_annotation_and_delete_files(args,delete_in_the_end:bool=False):
             frame_grouped = annotations_pd.groupby(by='Frame')
 
             frameSize = (640, 480)
-            if False:
+            if args.write_movie:
                 write_movie(frame_grouped,folder,frameSize)
                 
             if True:
